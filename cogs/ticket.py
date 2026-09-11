@@ -1049,6 +1049,16 @@ class ContainerPanelView(discord.ui.LayoutView):
             container.add_item(discord.ui.TextDisplay(description[:4000]))
         if title or description:
             container.add_item(discord.ui.Separator())
+        else:
+            # Keep an empty Container visually expanded when it contains only
+            # button rows. Discord can otherwise collapse a buttons-only
+            # container into a bare-looking component block.
+            container.add_item(
+                discord.ui.Separator(
+                    spacing=discord.SeparatorSpacing.small,
+                    visible=False,
+                )
+            )
 
         buttons = settings.get("buttons", [])[:MAX_BUTTONS]
         for start in range(0, len(buttons), 5):
