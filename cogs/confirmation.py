@@ -79,7 +79,7 @@ SAMPLE_ORDER = {
     "notes": "rushed",
 }
 
-FIELDS = ("item", "price", "quantity", "notes", "user")
+FIELDS = ("item", "price", "quantity", "notes", "code", "user")
 
 ALIASES = {
     "item": "item", "order": "item", "product": "item",
@@ -87,6 +87,7 @@ ALIASES = {
     "quantity": "quantity", "qty": "quantity",
     "notes": "notes", "note": "notes", "details": "notes", "extra": "notes",
     "details/notes": "notes",
+    "code": "code", "discount": "code", "discount code": "code",
     "user": "user", "customer": "user", "buyer": "user",
 }
 
@@ -167,6 +168,7 @@ def order_values(order, author_id):
         "price": order.get("price", ""),
         "quantity": order.get("quantity", ""),
         "notes": order.get("notes") or "none",
+        "code": order.get("code") or "none",
         "user": f"<@{author_id}>" if author_id else "",
     }
 
@@ -850,15 +852,26 @@ class Confirmation(commands.Cog):
         price="how much it costs",
         quantity="how many",
         notes="any extra notes (optional)",
+        code="discount code (optional)",
     )
     @commands.guild_only()
-    async def confirmation(self, ctx, item: str, price: str, quantity: str, *, notes: str = None):
+    async def confirmation(
+        self,
+        ctx,
+        item: str,
+        price: str,
+        quantity: str,
+        *,
+        notes: str = None,
+        code: str = None,
+    ):
         settings = settings_for(ctx.guild.id)
         order = {
             "item": item.strip(),
             "price": price.strip(),
             "quantity": quantity.strip(),
             "notes": (notes or "").strip(),
+            "code": (code or "").strip(),
         }
         # Keep the header and confirmation container in the same message.
         view = ConfirmView(settings, order, ctx.author.id, ctx.guild)
