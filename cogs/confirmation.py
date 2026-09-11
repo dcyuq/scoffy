@@ -115,6 +115,7 @@ def defaults():
         "footer": DEFAULT_FOOTER,
         "confirm_button": DEFAULT_CONFIRM_BUTTON,
         "received_format": DEFAULT_RECEIVED,
+        "terms_enabled": True,
         "terms_format": DEFAULT_TERMS_FORMAT,
         "terms_button": DEFAULT_TERMS_BUTTON,
         "payment_methods": [dict(method) for method in DEFAULT_PAYMENT_METHODS],
@@ -253,16 +254,27 @@ class ConfirmView(discord.ui.LayoutView):
         self.add_item(box)
 
     async def confirm(self, interaction):
-        # Keep the order confirmation message intact and send Terms & Conditions
-        # as a new public message in the ticket channel.
+        # Keep the order confirmation message intact.
+        # If Terms & Conditions are disabled, go directly to payment options.
         settings = self.settings
-        await interaction.response.send_message(
-            view=TermsView(
+
+        if not settings.get("terms_enabled", True):
+            view = PaymentView(
                 settings=settings,
                 order=self.order,
                 author_id=self.author_id,
                 guild=interaction.guild,
-            ),
+            )
+        else:
+            view = TermsView(
+                settings=settings,
+                order=self.order,
+                author_id=self.author_id,
+                guild=interaction.guild,
+            )
+
+        await interaction.response.send_message(
+            view=view,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -724,6 +736,7 @@ class SetupView(discord.ui.View):
             "**confirmation setup**",
             "",
             f"**confirm button** : {settings['confirm_button']}",
+            f"**terms and conditions** : {'on' if settings.get('terms_enabled', True) else 'off'}",
             f"**terms button** : {settings['terms_button']}",
             f"**payment methods** : {len(settings.get('payment_methods') or [])}",
             "",
@@ -769,6 +782,12 @@ class SetupView(discord.ui.View):
     @discord.ui.button(label="received format", style=discord.ButtonStyle.secondary, row=1)
     async def received_format(self, interaction, button):
         await self.edit(interaction, "received_format", "received format", multiline=True)
+
+    @discord.ui.button(label="terms on/off", style=discord.ButtonStyle.secondary, row=2)
+    async def terms_toggle(self, interaction, button):
+        self.settings["terms_enabled"] = not self.settings.get("terms_enabled", True)
+        save_config()
+        await self.refresh(interaction)
 
     @discord.ui.button(label="terms format", style=discord.ButtonStyle.secondary, row=2)
     async def terms_format(self, interaction, button):

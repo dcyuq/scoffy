@@ -587,16 +587,26 @@ async def create_ticket(interaction, button_data, answers):
     ping = f"{interaction.user.mention} {mentions}".strip()
 
     if button_data.get("confirmation_mode"):
-        opening_view = TicketConfirmationView(guild, ping, answers, interaction.user.id)
+        # For confirmation tickets, print the header as its own normal message
+        # before sending the order-confirmation component message.
+        if ping:
+            await channel.send(
+                content=ping,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
+            )
+        opening_view = TicketConfirmationView(guild, answers, interaction.user.id)
+        opening_message = await channel.send(
+            view=opening_view,
+            allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
+        )
     else:
         opening_view = TicketControlView(
             ping, heading, welcome, detail, settings["panel"]["color"]
         )
-
-    opening_message = await channel.send(
-        view=opening_view,
-        allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
-    )
+        opening_message = await channel.send(
+            view=opening_view,
+            allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
+        )
  
     await interaction.followup.send(
         embed=embeds.notice(f"ticket created: {channel.mention}"),
@@ -1176,12 +1186,10 @@ def confirmation_order(answers):
     return order
 
 class TicketConfirmationView(discord.ui.LayoutView):
-    def __init__(self, guild, ping, answers, author_id):
+    def __init__(self, guild, answers, author_id):
         super().__init__(timeout=None)
         settings = confirmation.settings_for(guild.id)
         order = confirmation_order(answers)
-        if ping:
-            self.add_item(discord.ui.TextDisplay(ping[:2000]))
         container = discord.ui.Container()
         receipt = confirmation.render(
             settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT),
