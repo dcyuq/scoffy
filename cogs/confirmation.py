@@ -238,17 +238,19 @@ class ConfirmView(discord.ui.LayoutView):
 
     def build(self):
         self.clear_items()
-        ping = render(self.settings.get("ping") or "", self.order, self.author_id, self.guild).strip()
-        if ping:
-            self.add_item(discord.ui.TextDisplay(ping[:2000]))
 
+        # The confirmation itself stays inside one container.
         box = discord.ui.Container()
         box.add_item(discord.ui.TextDisplay(
             render(self.settings["confirm_format"], self.order, self.author_id, self.guild)[:4000]
         ))
+
         footer = (self.settings.get("footer") or "").strip()
         if footer:
             box.add_item(discord.ui.TextDisplay(footer[:1000]))
+
+        # The separator belongs to the container, so its length follows
+        # the container/format width instead of being a separate full-width element.
         box.add_item(discord.ui.Separator())
         box.add_item(ConfirmRow(self, self.settings.get("confirm_button"), self.guild))
         self.add_item(box)
@@ -846,6 +848,15 @@ class Confirmation(commands.Cog):
             "quantity": quantity.strip(),
             "notes": (notes or "").strip(),
         }
+        # Send the header/ping as its own message.
+        ping = render(settings.get("ping") or "", order, ctx.author.id, ctx.guild).strip()
+        if ping:
+            await ctx.send(
+                content=ping[:2000],
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+            )
+
+        # Send the formatted confirmation container underneath the header.
         view = ConfirmView(settings, order, ctx.author.id, ctx.guild)
         await ctx.send(
             view=view,
