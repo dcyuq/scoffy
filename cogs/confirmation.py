@@ -767,7 +767,14 @@ class SetupView(discord.ui.View):
 
     @discord.ui.button(label="ping", style=discord.ButtonStyle.secondary, row=0)
     async def ping(self, interaction, button):
-        await self.edit(interaction, "ping", "ping line (use {user})", required=False, limit=200)
+        await self.edit(
+            interaction,
+            "ping",
+            "ping / header (use {user})",
+            multiline=True,
+            required=False,
+            limit=1000,
+        )
 
     @discord.ui.button(label="confirm format", style=discord.ButtonStyle.secondary, row=0)
     async def confirm_format(self, interaction, button):
