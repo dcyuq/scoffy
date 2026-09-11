@@ -239,6 +239,11 @@ class ConfirmView(discord.ui.LayoutView):
     def build(self):
         self.clear_items()
 
+        # Keep the header/ping and confirmation container in the same message.
+        ping = render(self.settings.get("ping") or "", self.order, self.author_id, self.guild).strip()
+        if ping:
+            self.add_item(discord.ui.TextDisplay(ping[:2000]))
+
         # The confirmation itself stays inside one container.
         box = discord.ui.Container()
         box.add_item(discord.ui.TextDisplay(
@@ -855,15 +860,7 @@ class Confirmation(commands.Cog):
             "quantity": quantity.strip(),
             "notes": (notes or "").strip(),
         }
-        # Send the header/ping as its own message.
-        ping = render(settings.get("ping") or "", order, ctx.author.id, ctx.guild).strip()
-        if ping:
-            await ctx.send(
-                content=ping[:2000],
-                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-            )
-
-        # Send the formatted confirmation container underneath the header.
+        # Keep the header and confirmation container in the same message.
         view = ConfirmView(settings, order, ctx.author.id, ctx.guild)
         await ctx.send(
             view=view,
