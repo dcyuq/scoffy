@@ -87,6 +87,11 @@ PANEL_MODES = [
         "Buttons only",
         "No text and no embed. Nothing but the buttons.",
     ),
+    (
+        "container",
+        "Container",
+        "A Discord container around the panel. If the text is empty, only the buttons remain inside it.",
+    ),
 ]
  
 DEFAULT_PANEL = {
@@ -449,6 +454,8 @@ def build_panel_view(guild_id, settings):
     panel = settings["panel"]
     if panel.get("layout") == "dropdown":
         return DropdownPanelView(guild_id, settings["buttons"], panel.get("placeholder"))
+    if panel_mode(panel) == "container":
+        return ContainerPanelView(guild_id, settings)
     if panel_mode(panel) == "bare":
         return BarePanelView(guild_id, settings["buttons"])
     return PanelView(guild_id, settings["buttons"])
@@ -1021,6 +1028,36 @@ class BarePanelView(discord.ui.LayoutView):
         for button_data in buttons[:5]:
             row.add_item(TicketOpenButton(guild_id, button_data))
         self.add_item(row)
+
+
+class ContainerPanelView(discord.ui.LayoutView):
+    """Render the ticket panel inside a Discord Container component."""
+
+    def __init__(self, guild_id, settings):
+        super().__init__(timeout=None)
+        panel = settings["panel"]
+        container = discord.ui.Container()
+
+        title = (panel.get("title") or "").strip()
+        description = (panel.get("description") or "").strip()
+
+        # Only add text that was actually configured. An empty panel becomes
+        # a clean container containing just the ticket buttons.
+        if title:
+            container.add_item(discord.ui.TextDisplay(f"## {title[:256]}"))
+        if description:
+            container.add_item(discord.ui.TextDisplay(description[:4000]))
+        if title or description:
+            container.add_item(discord.ui.Separator())
+
+        buttons = settings.get("buttons", [])[:MAX_BUTTONS]
+        for start in range(0, len(buttons), 5):
+            row = discord.ui.ActionRow()
+            for button_data in buttons[start:start + 5]:
+                row.add_item(TicketOpenButton(guild_id, button_data))
+            container.add_item(row)
+
+        self.add_item(container)
  
 class TicketSelect(discord.ui.Select):
     def __init__(self, guild_id, buttons, placeholder):
@@ -1254,14 +1291,19 @@ class EmbedEditModal(discord.ui.Modal, title="Panel Appearance"):
         panel = settings["panel"]
  
         self.f_title = discord.ui.TextInput(
-            label="Title", default=panel["title"], max_length=256, required=True
+            label="Title",
+            default=panel.get("title") or "",
+            max_length=256,
+            required=False,
+            placeholder="Leave blank for no title",
         )
         self.f_desc = discord.ui.TextInput(
             label="Description",
-            default=panel["description"],
+            default=panel.get("description") or "",
             style=discord.TextStyle.paragraph,
             max_length=4000,
-            required=True,
+            required=False,
+            placeholder="Leave blank for no description",
         )
         self.f_color = discord.ui.TextInput(
             label="Colour hex",
@@ -1513,6 +1555,7 @@ class AppearanceView(discord.ui.View):
             "embed_plain": "Title is hidden. Everything else applies.",
             "text": "Only the description is used, as plain message text.",
             "bare": "Nothing but buttons. Text, colour and images are ignored.",
+            "container": "Discord Container panel. Leave the title and description empty for a clean buttons-only container.",
         }
         layout = self.builder.settings["panel"].get("layout", "buttons")
         pick = "a dropdown menu" if layout == "dropdown" else "buttons"
