@@ -2008,7 +2008,11 @@ class BuilderView(discord.ui.View):
         view = build_panel_view(interaction.guild.id, settings)
  
         try:
-            if embed is not None:
+            # Components V2 LayoutView/Container messages cannot be mixed
+            # with legacy embeds or message content.
+            if panel_mode(settings["panel"]) == "container":
+                sent = await channel.send(view=view)
+            elif embed is not None:
                 sent = await channel.send(embed=embed, view=view)
             elif content:
                 sent = await channel.send(content=content, view=view)
