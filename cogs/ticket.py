@@ -118,6 +118,7 @@ DEFAULT_BUTTON = {
     "style": "primary",
     "emoji": None,
     "category_id": None,
+    "channel_name": None,
     "welcome": "Describe your issue and someone will be with you shortly.",
     "questions": [],
     "confirmation_mode": False,
@@ -344,7 +345,6 @@ def ensure_config(guild_id):
             "staff_role_ids": [],
             "log_channel_id": None,
             "category_id": None,
-            "ticket_name_format": "ticket-{number}",
             "counter": 0,
             "panel": dict(DEFAULT_PANEL),
             "buttons": [],
@@ -354,7 +354,6 @@ def ensure_config(guild_id):
     settings.setdefault("panel", dict(DEFAULT_PANEL))
     settings.setdefault("buttons", [])
     settings.setdefault("counter", 0)
-    settings.setdefault("ticket_name_format", "ticket-{number}")
     settings.setdefault("staff_role_ids", [])
     settings["panel"].setdefault("mode", "embed_title")
     settings["panel"].setdefault("layout", "buttons")
@@ -489,32 +488,21 @@ async def send_log(guild, embed):
     except (discord.Forbidden, discord.HTTPException):
         pass
  
-def render_ticket_name(template, interaction, number, button_data):
-    """Render the configured ticket channel name and keep it Discord-safe."""
-    template = (template or "ticket-{number}").strip()
-    user = interaction.user
+def button_text(button_data):
+    return button_data.get("label") or button_data.get("channel_name") or "Ticket"
 
-    values = {
-        "number": f"{number:04d}",
-        "user": user.name,
-        "username": user.name,
-        "displayname": getattr(user, "display_name", user.name),
-        "button": button_data.get("label", "Ticket"),
-    }
 
-    try:
-        name = template.format(**values)
-    except (KeyError, ValueError):
-        # A bad placeholder should never prevent a ticket from opening.
-        name = f"ticket-{number:04d}"
+def channel_prefix(button_data):
+    # Like Jeyai's system: use the custom channel name if set;
+    # otherwise use the button's label.
+    return button_data.get("channel_name") or button_data.get("label") or "ticket"
 
-    # Discord channel names are lowercase and cannot contain spaces.
-    name = name.lower().strip()
-    name = re.sub(r"\s+", "-", name)
-    name = re.sub(r"[^a-z0-9_-]", "-", name)
-    name = re.sub(r"-+", "-", name).strip("-_")
 
-    return (name or f"ticket-{number:04d}")[:100]
+def channel_slug(button_data, user, number):
+    # The final channel name is: <button channel name/label>-<username>.
+    raw = f"{channel_prefix(button_data)}-{user.name}"
+    slug = re.sub(r"[^a-z0-9_-]+", "-", raw.lower()).strip("-")[:100]
+    return slug or f"ticket-{number:04d}"
 
 
 async def create_ticket(interaction, button_data, answers):
@@ -580,12 +568,7 @@ async def create_ticket(interaction, button_data, answers):
  
     try:
         channel = await guild.create_text_channel(
-            name=render_ticket_name(
-                settings.get("ticket_name_format", "ticket-{number}"),
-                interaction,
-                number,
-                button_data,
-            ),
+            name=channel_slug(button_data, interaction.user, number),
             category=category,
             overwrites=overwrites,
             reason=f"Ticket opened by {interaction.user}",
@@ -1357,6 +1340,13 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             required=False,
             max_length=100,
         )
+        self.f_channel = discord.ui.TextInput(
+            label="Channel name",
+            default=base.get("channel_name") or "",
+            placeholder="Blank uses the button name. Username goes after it",
+            required=False,
+            max_length=60,
+        )
         self.f_welcome = discord.ui.TextInput(
             label="Opening message",
             default=base.get("welcome", ""),
@@ -1371,7 +1361,7 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             required=False,
             max_length=25,
         )
-        for item in (self.f_label, self.f_emoji, self.f_welcome, self.f_category):
+        for item in (self.f_label, self.f_emoji, self.f_channel, self.f_welcome, self.f_category):
             self.add_item(item)
  
     async def on_submit(self, interaction):
@@ -1401,6 +1391,8 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             return
  
         await interaction.response.defer()
+
+        channel_name = self.f_channel.value.strip() or None
  
         welcome = resolve_text(
             self.f_welcome.value, interaction.guild, interaction.client
@@ -1414,6 +1406,7 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
                     "style": "primary",
                     "emoji": emoji_value,
                     "category_id": category_id,
+                    "channel_name": channel_name,
                     "welcome": welcome,
                     "questions": [],
                     "confirmation_mode": False,
@@ -1423,6 +1416,7 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             self.existing["label"] = self.f_label.value
             self.existing["emoji"] = emoji_value
             self.existing["category_id"] = category_id
+            self.existing["channel_name"] = channel_name
             self.existing["welcome"] = welcome
  
         save_config()
@@ -1550,42 +1544,6 @@ class AppearanceView(discord.ui.View):
     async def edit_menu_text(self, interaction, button):
         await interaction.response.send_modal(MenuTextModal(self.builder))
  
-class TicketNameModal(discord.ui.Modal, title="Ticket Channel Name"):
-    def __init__(self, builder):
-        super().__init__()
-        self.builder = builder
-        self.f_name = discord.ui.TextInput(
-            label="Ticket name format",
-            default=builder.settings.get("ticket_name_format", "ticket-{number}"),
-            placeholder="Example: support-{username}",
-            required=True,
-            max_length=100,
-        )
-        self.add_item(self.f_name)
-
-    async def on_submit(self, interaction):
-        value = self.f_name.value.strip()
-        if not value:
-            await interaction.response.send_message(
-                embed=embeds.error("ticket name format cannot be empty."),
-                ephemeral=True,
-            )
-            return
-
-        self.builder.settings["ticket_name_format"] = value
-        save_config()
-        await interaction.response.send_message(
-            embed=embeds.notice(
-                "ticket name format saved.\n\n"
-                "Available placeholders: `{number}`, `{username}`, `{user}`, "
-                "`{displayname}`, and `{button}`.\n\n"
-                "Example: `order-{username}` → `order-chloe`"
-            ),
-            ephemeral=True,
-        )
-        await self.builder.refresh()
-
-
 class SettingsView(discord.ui.View):
     def __init__(self, builder):
         super().__init__(timeout=300)
@@ -1728,6 +1686,7 @@ class ButtonManageView(discord.ui.View):
             description=(
                 f"**Icon** - {icon_text(self.button_data)}\n"
                 f"**Colour** - {style_label(self.button_data.get('style'))}\n"
+                f"**Channel** - {channel_prefix(self.button_data)}-username\n"
                 f"**Category** - {category_text}\n"
                 f"**Behaviour** - {mode}\n\n"
                 f"{listed}"
@@ -1885,7 +1844,6 @@ class BuilderView(discord.ui.View):
             f"**Staff** - {' '.join(r.mention for r in roles) if roles else 'not set'}",
             f"**Logs** - {log.mention if log else 'not set'}",
             f"**Panel** - {target.mention if target else 'not set'}",
-            f"**Ticket name** - `{settings.get('ticket_name_format', 'ticket-{number}')}`",
             "",
             f"**Style** - {panel_mode_label(panel)}",
         ]
@@ -1907,7 +1865,7 @@ class BuilderView(discord.ui.View):
                 where = cat.name if cat else "default"
                 if entry.get("confirmation_mode"):
                     mode = "confirmation"
-                lines.append(f"- {shown} ({colour}, {mode}, {where})")
+                lines.append(f"- {shown} ({colour}, {mode}, {where}, {channel_prefix(entry)}-username)")
         else:
             lines.append("")
             lines.append("**Buttons** - none yet, add one before publishing")
@@ -1934,10 +1892,6 @@ class BuilderView(discord.ui.View):
             ephemeral=True,
         )
  
-    @discord.ui.button(label="Ticket Name", style=discord.ButtonStyle.secondary)
-    async def open_ticket_name(self, interaction, button):
-        await interaction.response.send_modal(TicketNameModal(self))
-
     @discord.ui.button(label="Appearance", style=discord.ButtonStyle.secondary)
     async def open_appearance(self, interaction, button):
         view = AppearanceView(self)
