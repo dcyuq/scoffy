@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import aiohttp
 
-import embeds  # Importing your custom embeds module
+import embeds  
 
 class BotProfile(commands.Cog):
     def __init__(self, bot):
@@ -15,14 +15,12 @@ class BotProfile(commands.Cog):
     @app_commands.command(name="setavatar", description="Changes the bot's profile picture using an image URL.")
     @app_commands.describe(url="The direct URL to the image (.png or .jpg)")
     async def setavatar(self, interaction: discord.Interaction, url: str):
-        # Enforce owner-only execution
         if not await self.is_owner(interaction):
             return await interaction.response.send_message(
                 embed=embeds.error("Only the bot owner can use this command.", title="Permission Denied"), 
                 ephemeral=True
             )
 
-        # Defer the response since downloading the image might take >3 seconds
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -51,15 +49,17 @@ class BotProfile(commands.Cog):
 
     @app_commands.command(name="setstatus", description="Changes the bot's status.")
     @app_commands.describe(
-        activity_type="The type of activity to display",
-        status_message="The custom message to display next to the activity"
+        activity_type="The type of activity to display (Select 'Clear' to remove status)",
+        status_message="The custom message or bubble text (Leave blank if clearing)"
     )
     @app_commands.choices(activity_type=[
+        app_commands.Choice(name="Custom (Bubble Status)", value="custom"),
         app_commands.Choice(name="Playing", value="playing"),
         app_commands.Choice(name="Watching", value="watching"),
         app_commands.Choice(name="Listening", value="listening"),
+        app_commands.Choice(name="Clear (Remove Status)", value="clear"),
     ])
-    async def setstatus(self, interaction: discord.Interaction, activity_type: app_commands.Choice[str], status_message: str):
+    async def setstatus(self, interaction: discord.Interaction, activity_type: app_commands.Choice[str], status_message: str = None):
         if not await self.is_owner(interaction):
             return await interaction.response.send_message(
                 embed=embeds.error("Only the bot owner can use this command.", title="Permission Denied"), 
@@ -68,7 +68,22 @@ class BotProfile(commands.Cog):
 
         activity_val = activity_type.value
         
-        if activity_val == "playing":
+        if activity_val == "clear":
+            await self.bot.change_presence(activity=None)
+            return await interaction.response.send_message(
+                embed=embeds.notice("Activity status has been removed.", title="Status Cleared"), 
+                ephemeral=True
+            )
+
+        if not status_message:
+            return await interaction.response.send_message(
+                embed=embeds.error("You must provide a status_message when setting an activity.", title="Missing Argument"), 
+                ephemeral=True
+            )
+        
+        if activity_val == "custom":
+            activity = discord.CustomActivity(name=status_message)
+        elif activity_val == "playing":
             activity = discord.Game(name=status_message)
         elif activity_val == "watching":
             activity = discord.Activity(type=discord.ActivityType.watching, name=status_message)
@@ -91,7 +106,6 @@ class BotProfile(commands.Cog):
                 ephemeral=True
             )
 
-        # Defer because API calls to edit the bot user can sometimes lag
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -101,7 +115,6 @@ class BotProfile(commands.Cog):
             )
             
         except discord.HTTPException as e:
-            # Discord limits username changes to twice per hour
             await interaction.followup.send(
                 embed=embeds.error(f"Discord blocked the request. You might be rate-limited (2 changes per hour).\nError: {e}", title="Update Failed")
             )
@@ -109,7 +122,6 @@ class BotProfile(commands.Cog):
             await interaction.followup.send(
                 embed=embeds.error(f"An error occurred: {e}", title="Error")
             )
-
 
 async def setup(bot):
     await bot.add_cog(BotProfile(bot))
