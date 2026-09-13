@@ -614,9 +614,7 @@ async def create_ticket(interaction, button_data, answers):
 
     welcome = button_data.get("welcome") or DEFAULT_BUTTON["welcome"]
     heading = None
-    detail = "\n\n".join(
-        f"**{question[:256]}**\n{(answer or '-')[:1024]}" for question, answer in answers
-    ) or None
+    detail = None
 
     mentions = " ".join(r.mention for r in roles)
     ping = f"{interaction.user.mention} {mentions}".strip()
@@ -627,7 +625,7 @@ async def create_ticket(interaction, button_data, answers):
                 content=ping,
                 allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
             )
-        opening_view = TicketConfirmationView(guild, answers, interaction.user.id)
+        opening_view = TicketConfirmationView(guild, answers, interaction.user.id, button_data)
         opening_message = await channel.send(
             view=opening_view,
             allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
@@ -1227,8 +1225,13 @@ class TicketConfirmButton(discord.ui.Button):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-def confirmation_order(answers):
-    order = {"item": "", "price": "", "quantity": "", "notes": "", "code": ""}
+def confirmation_order(answers, button_data=None):
+    order = {}
+    if button_data and "questions" in button_data:
+        for q, (label, answer) in zip(button_data["questions"], answers):
+            var_name = q.get("variable") or re.sub(r"\s+", "_", q.get("label", "").lower())
+            order[var_name] = (answer or "").strip()
+            
     aliases = {
         "item": {"item", "order", "product", "name"},
         "price": {"price", "amount", "cost", "total"},
@@ -1239,16 +1242,16 @@ def confirmation_order(answers):
     for label, answer in answers:
         normalized = re.sub(r"\s+", " ", (label or "").strip().lower())
         for field, names in aliases.items():
-            if normalized in names:
+            if normalized in names and field not in order:
                 order[field] = (answer or "").strip()
                 break
     return order
 
 class TicketConfirmationView(discord.ui.LayoutView):
-    def __init__(self, guild, answers, author_id):
+    def __init__(self, guild, answers, author_id, button_data=None):
         super().__init__(timeout=None)
         settings = confirmation.settings_for(guild.id)
-        order = confirmation_order(answers)
+        order = confirmation_order(answers, button_data)
         container = discord.ui.Container()
         receipt = confirmation.render(
             settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT),
