@@ -27,11 +27,6 @@ DEFAULT_CONFIRM_FORMAT = (
 )
 DEFAULT_FOOTER = "kindly make sure all information is complete and correct before proceeding."
 DEFAULT_CONFIRM_BUTTON = "yes, proceed"
-DEFAULT_RECEIVED = (
-    "**confirmation received**\n"
-    "\n"
-    "kindly choose your payment option and remain patient for the owner to respond."
-)
 DEFAULT_TERMS_FORMAT = (
     "**terms and conditions**\n"
     "\n"
@@ -115,7 +110,6 @@ def defaults():
         "confirm_format": DEFAULT_CONFIRM_FORMAT,
         "footer": DEFAULT_FOOTER,
         "confirm_button": DEFAULT_CONFIRM_BUTTON,
-        "received_format": DEFAULT_RECEIVED,
         "terms_enabled": True,
         "terms_format": DEFAULT_TERMS_FORMAT,
         "terms_button": DEFAULT_TERMS_BUTTON,
@@ -217,6 +211,17 @@ def apply_label(button, raw, guild, fallback):
         button.emoji = emoji
 
 
+def get_default_payment_method(settings):
+    methods = settings.get("payment_methods") or []
+    if methods:
+        return methods[0]
+    return {
+        "id": "gcash",
+        "label": DEFAULT_GCASH_BUTTON,
+        "text": DEFAULT_GCASH_TEXT,
+    }
+
+
 class ConfirmRow(discord.ui.ActionRow):
     def __init__(self, parent, raw, guild):
         super().__init__()
@@ -261,11 +266,18 @@ class ConfirmView(discord.ui.LayoutView):
         settings = self.settings
 
         if not settings.get("terms_enabled", True):
-            view = PaymentView(
+            method = get_default_payment_method(settings)
+            view = PaymentMethodView(
                 settings=settings,
                 order=self.order,
                 author_id=self.author_id,
                 guild=interaction.guild,
+                method=method,
+            )
+            await interaction.response.send_message(
+                view=view,
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         else:
             view = TermsView(
@@ -274,11 +286,10 @@ class ConfirmView(discord.ui.LayoutView):
                 author_id=self.author_id,
                 guild=interaction.guild,
             )
-
-        await interaction.response.send_message(
-            view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+            await interaction.response.send_message(
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
 
 class TermsRow(discord.ui.ActionRow):
@@ -320,77 +331,15 @@ class TermsView(discord.ui.LayoutView):
         self.add_item(box)
 
     async def agree(self, interaction):
-        view = PaymentView(self.settings, self.order, self.author_id, interaction.guild)
-        await interaction.response.send_message(
-            view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-
-class PaymentMethodRow(discord.ui.ActionRow):
-    def __init__(self, parent, methods, guild):
-        super().__init__()
-        self.owner = parent
-        self.methods = methods
-
-        for method in methods:
-            button = discord.ui.Button(style=discord.ButtonStyle.secondary)
-            apply_label(
-                button,
-                method.get("label"),
-                guild,
-                method.get("id", "payment"),
-            )
-            button.callback = self._make_callback(method)
-            self.add_item(button)
-
-    def _make_callback(self, method):
-        async def callback(interaction):
-            await self.owner.pay(interaction, method)
-        return callback
-
-
-class PaymentView(discord.ui.LayoutView):
-    def __init__(self, settings, order, author_id, guild):
-        super().__init__(timeout=600)
-        self.settings = settings
-        self.order = order
-        self.author_id = author_id
-        self.guild = guild
-        self.build()
-
-    def build(self):
-        self.clear_items()
-
-        box = discord.ui.Container()
-        box.add_item(discord.ui.TextDisplay(
-            render(
-                self.settings.get("received_format") or DEFAULT_RECEIVED,
-                self.order,
-                self.author_id,
-                self.guild,
-            )[:4000]
-        ))
-        box.add_item(discord.ui.Separator())
-
-        methods = self.settings.get("payment_methods") or []
-        if not methods:
-            box.add_item(discord.ui.TextDisplay("no payment methods have been configured."))
-        else:
-            for index in range(0, len(methods), 5):
-                box.add_item(PaymentMethodRow(self, methods[index:index + 5], self.guild))
-
-        self.add_item(box)
-
-    async def pay(self, interaction, method):
+        settings = self.settings
+        method = get_default_payment_method(settings)
         view = PaymentMethodView(
-            self.settings,
-            self.order,
-            self.author_id,
-            interaction.guild,
-            method,
+            settings=settings,
+            order=self.order,
+            author_id=self.author_id,
+            guild=interaction.guild,
+            method=method,
         )
-        # Ephemeral=True makes the selected payment option visible to ONLY the user clicking the button
         await interaction.response.send_message(
             view=view,
             ephemeral=True,
@@ -696,8 +645,6 @@ class RemovePaymentMethodModal(discord.ui.Modal):
 
 
 class PaymentMethodsModal:
-    """Compatibility shim for older code that may import this name."""
-
     def __init__(self, panel):
         self.panel = panel
 
@@ -782,10 +729,6 @@ class SetupView(discord.ui.View):
     @discord.ui.button(label="confirm button", style=discord.ButtonStyle.secondary, row=1)
     async def confirm_button(self, interaction, button):
         await self.edit(interaction, "confirm_button", "confirm button label", limit=LABEL_LIMIT)
-
-    @discord.ui.button(label="received format", style=discord.ButtonStyle.secondary, row=1)
-    async def received_format(self, interaction, button):
-        await self.edit(interaction, "received_format", "received format", multiline=True)
 
     @discord.ui.button(label="terms on/off", style=discord.ButtonStyle.secondary, row=2)
     async def terms_toggle(self, interaction, button):
