@@ -969,6 +969,70 @@ async def dm_transcript(client, guild, entry, document, transcript_url):
     except (discord.Forbidden, discord.HTTPException):
         pass
 
+async def close_ticket_channel(channel, guild, closer, client, data, reason=None):
+    """Close a tracked ticket, write its log/transcript, DM the opener, and delete it."""
+    reason = (reason or "").strip()
+    messages = await collect_messages(channel)
+
+    entry = {
+        "guild_id": data["guild_id"],
+        "number": data["number"],
+        "opener_id": data["opener_id"],
+        "closer_id": closer.id,
+        "claimed_by": data.get("claimed_by"),
+        "opened_at": data["opened_at"],
+        "closed_at": time.time(),
+        "kind": data.get("kind", "Ticket"),
+        "answers": data.get("answers", []),
+        "reason": reason,
+        "message_count": len(messages),
+    }
+
+    document = build_transcript_html(guild, entry, messages)
+    sample_url = first_image_url(messages)
+    transcript_url = None
+
+    settings = get_config(guild.id) or {}
+    log_channel = guild.get_channel(settings.get("log_channel_id"))
+
+    if log_channel is not None:
+        try:
+            embed = build_close_embed(guild, entry)
+            if sample_url:
+                embed.set_image(url=sample_url)
+            sent = await log_channel.send(
+                embed=embed,
+                file=transcript_file(document, entry["number"]),
+                view=LogControlView(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            logs[sent.id] = entry
+            save_logs()
+            if sent.attachments:
+                transcript_url = sent.attachments[0].url
+                linked = LogControlView()
+                linked.add_item(discord.ui.Button(label="download transcript", url=transcript_url))
+                try:
+                    await sent.edit(view=linked)
+                except discord.HTTPException:
+                    pass
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    await dm_transcript(client, guild, entry, document, transcript_url)
+
+    tickets.pop(channel.id, None)
+    save_tickets()
+
+    try:
+        audit_reason = f"Ticket closed by {closer}"
+        if reason:
+            audit_reason += f": {reason[:400]}"
+        await channel.delete(reason=audit_reason)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
 class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
     def __init__(self, data, channel):
         super().__init__()
@@ -976,10 +1040,10 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
         self.channel = channel
         self.f_reason = discord.ui.TextInput(
             label="Reason for closing",
-            placeholder="Shown to staff in the log",
+            placeholder="Optional — leave blank to close without a reason",
             style=discord.TextStyle.paragraph,
             max_length=1000,
-            required=True,
+            required=False,
         )
         self.add_item(self.f_reason)
 
@@ -989,64 +1053,14 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
             ephemeral=True,
         )
 
-        messages = await collect_messages(self.channel)
-
-        entry = {
-            "guild_id": self.data["guild_id"],
-            "number": self.data["number"],
-            "opener_id": self.data["opener_id"],
-            "closer_id": interaction.user.id,
-            "claimed_by": self.data.get("claimed_by"),
-            "opened_at": self.data["opened_at"],
-            "closed_at": time.time(),
-            "kind": self.data.get("kind", "Ticket"),
-            "answers": self.data.get("answers", []),
-            "reason": self.f_reason.value,
-            "message_count": len(messages),
-        }
-
-        document = build_transcript_html(interaction.guild, entry, messages)
-        sample_url = first_image_url(messages)
-        transcript_url = None
-
-        settings = get_config(interaction.guild.id)
-        log_channel = interaction.guild.get_channel(settings.get("log_channel_id"))
-
-        if log_channel is not None:
-            try:
-                embed = build_close_embed(interaction.guild, entry)
-                if sample_url:
-                    embed.set_image(url=sample_url)
-                sent = await log_channel.send(
-                    embed=embed,
-                    file=transcript_file(document, entry["number"]),
-                    view=LogControlView(),
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                logs[sent.id] = entry
-                save_logs()
-                if sent.attachments:
-                    transcript_url = sent.attachments[0].url
-                    linked = LogControlView()
-                    linked.add_item(discord.ui.Button(label="download transcript", url=transcript_url))
-                    try:
-                        await sent.edit(view=linked)
-                    except discord.HTTPException:
-                        pass
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-        await dm_transcript(
-            interaction.client, interaction.guild, entry, document, transcript_url
+        await close_ticket_channel(
+            self.channel,
+            interaction.guild,
+            interaction.user,
+            interaction.client,
+            self.data,
+            self.f_reason.value,
         )
-
-        tickets.pop(self.channel.id, None)
-        save_tickets()
-
-        try:
-            await self.channel.delete(reason=f"Ticket closed by {interaction.user}")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
 
 class TicketQuestionModal(discord.ui.Modal):
     def __init__(self, button_data):
@@ -2173,6 +2187,12 @@ class Tickets(commands.Cog):
     async def cog_check(self, ctx):
         if ctx.guild is None:
             raise commands.NoPrivateMessage()
+
+        # /close is intentionally available to the ticket opener and ticket staff.
+        # The command itself performs the ticket-specific permission check.
+        if ctx.command and ctx.command.name == "close":
+            return True
+
         if can_manage(ctx.author):
             return True
         raise commands.MissingPermissions(["manage_guild"])
@@ -2270,6 +2290,50 @@ class Tickets(commands.Cog):
             return
         settings = ensure_config(ctx.guild.id)
         await self.open_builder(ctx, settings)
+
+    @commands.hybrid_command(
+        name="close",
+        description="Close the current ticket, with or without a reason.",
+    )
+    @app_commands.describe(reason="Optional reason for closing this ticket.")
+    @commands.guild_only()
+    async def close_ticket_command(self, ctx, *, reason: str = None):
+        data = tickets.get(ctx.channel.id)
+        if data is None:
+            await ctx.send(
+                embed=embeds.error("this command only works inside an open ticket."),
+                ephemeral=True,
+            )
+            return
+
+        settings = get_config(ctx.guild.id)
+        if not settings:
+            await ctx.send(
+                embed=embeds.error("ticket system is not configured."),
+                ephemeral=True,
+            )
+            return
+
+        if not is_staff(ctx.author, settings) and ctx.author.id != data["opener_id"]:
+            await ctx.send(
+                embed=embeds.error("only staff or the ticket opener can close this."),
+                ephemeral=True,
+            )
+            return
+
+        await ctx.send(
+            embed=embeds.notice("closing this ticket. a transcript is on its way."),
+            ephemeral=True,
+        )
+
+        await close_ticket_channel(
+            ctx.channel,
+            ctx.guild,
+            ctx.author,
+            ctx.bot,
+            data,
+            reason,
+        )
 
     @commands.hybrid_command(
         name="ticketstats",
