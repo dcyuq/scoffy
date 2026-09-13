@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import aiohttp
 
-import embeds 
+import embeds  # Importing your custom embeds module
 
 class BotProfile(commands.Cog):
     def __init__(self, bot):
@@ -42,7 +42,7 @@ class BotProfile(commands.Cog):
             
         except discord.HTTPException:
             await interaction.followup.send(
-                embed=embeds.error("Discord blocked the request. You might be rate-limited.", title="Rate Limited")
+                embed=embeds.error("Discord blocked the request. You might be rate-limited (2 changes per hour).", title="Rate Limited")
             )
         except Exception as e:
             await interaction.followup.send(
@@ -60,7 +60,6 @@ class BotProfile(commands.Cog):
         app_commands.Choice(name="Listening", value="listening"),
     ])
     async def setstatus(self, interaction: discord.Interaction, activity_type: app_commands.Choice[str], status_message: str):
-        # Enforce owner-only execution
         if not await self.is_owner(interaction):
             return await interaction.response.send_message(
                 embed=embeds.error("Only the bot owner can use this command.", title="Permission Denied"), 
@@ -78,11 +77,38 @@ class BotProfile(commands.Cog):
 
         await self.bot.change_presence(activity=activity)
         
-        # Ephemeral means only you will see the confirmation message
         await interaction.response.send_message(
             embed=embeds.notice(f"Status updated to: **{activity_type.name} {status_message}**", title="Status Updated"), 
             ephemeral=True
         )
+
+    @app_commands.command(name="setusername", description="Changes the bot's global username.")
+    @app_commands.describe(new_name="The new username for the bot")
+    async def setusername(self, interaction: discord.Interaction, new_name: str):
+        if not await self.is_owner(interaction):
+            return await interaction.response.send_message(
+                embed=embeds.error("Only the bot owner can use this command.", title="Permission Denied"), 
+                ephemeral=True
+            )
+
+        # Defer because API calls to edit the bot user can sometimes lag
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            await self.bot.user.edit(username=new_name)
+            await interaction.followup.send(
+                embed=embeds.notice(f"Username successfully changed to **{new_name}**.", title="Username Updated")
+            )
+            
+        except discord.HTTPException as e:
+            # Discord limits username changes to twice per hour
+            await interaction.followup.send(
+                embed=embeds.error(f"Discord blocked the request. You might be rate-limited (2 changes per hour).\nError: {e}", title="Update Failed")
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                embed=embeds.error(f"An error occurred: {e}", title="Error")
+            )
 
 
 async def setup(bot):
