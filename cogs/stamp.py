@@ -11,7 +11,7 @@ from storage import Store
 
 try:
     from PIL import Image
-except ImportError:  # Pillow is in requirements; degrade gracefully if absent.
+except ImportError:  # pillow 
     Image = None
 
 log = logging.getLogger(__name__)
