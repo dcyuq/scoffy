@@ -1295,9 +1295,23 @@ class TicketConfirmButton(discord.ui.Button):
         )
 
 def confirmation_order(answers, button_data=None):
-    # Keep the confirmation system and the opening-message formatter on the
-    # exact same variable rules.
-    return answer_context(answers, button_data)
+    order = {}
+    if button_data and "questions" in button_data:
+        for q, (label, answer) in zip(button_data["questions"], answers):
+            val = (answer or "").strip()
+            if q.get("variable"):
+                order[q.get("variable").strip()] = val
+            if label:
+                order[label.strip().lower()] = val
+                order[re.sub(r"\s+", "_", label.strip().lower())] = val
+            
+    for label, answer in answers:
+        val = (answer or "").strip()
+        if label:
+            order[label.strip().lower()] = val
+            order[re.sub(r"\s+", "_", label.strip().lower())] = val
+            
+    return order
 
 class TicketConfirmationView(discord.ui.LayoutView):
     def __init__(self, guild, answers, author_id, button_data=None):
@@ -1306,17 +1320,24 @@ class TicketConfirmationView(discord.ui.LayoutView):
         order = confirmation_order(answers, button_data)
         
         member = guild.get_member(author_id)
+        ctx_data = {
+            "user": member.mention if member else f"<@{author_id}>",
+            "username": member.name if member else str(author_id),
+            "guild_name": guild.name,
+        }
+        ctx_data.update(order)
+        
         fmt = settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT)
-        receipt = format_ticket_text(
-            fmt,
-            answers,
-            button_data,
-            extra={
-                "user": member.mention if member else f"<@{author_id}>",
-                "username": member.name if member else str(author_id),
-                "guild_name": guild.name,
-            },
-        )
+        
+        def replace_var(match):
+            key = match.group(1).strip()
+            if key in ctx_data:
+                return str(ctx_data[key])
+            if key.lower() in ctx_data:
+                return str(ctx_data[key.lower()])
+            return match.group(0)
+            
+        receipt = re.sub(r"\{([^}]+)\}", replace_var, fmt)
         
         container = discord.ui.Container()
         container.add_item(discord.ui.TextDisplay(receipt[:4000]))
