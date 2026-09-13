@@ -669,39 +669,54 @@ async def create_ticket(interaction, button_data, answers):
     }
     save_tickets()
 
-    welcome_template = button_data.get("welcome") or DEFAULT_BUTTON["welcome"]
-    welcome = format_ticket_text(
-        welcome_template,
-        answers,
-        button_data,
-        extra={
-            "user": interaction.user.mention,
-            "username": interaction.user.name,
-            "guild_name": guild.name,
-            "ticket_number": str(number),
-            "channel": channel.mention,
-        },
-    )
-    heading = None
-    detail = None
-
     mentions = " ".join(r.mention for r in roles)
     ping = f"{interaction.user.mention} {mentions}".strip()
 
     if button_data.get("confirmation_mode"):
+        # The designated Order button uses confirmation.py directly.
+        # This keeps the confirmation setup (including terms_enabled) as the
+        # single source of truth instead of duplicating that flow in tickets.py.
         if ping:
             await channel.send(
                 content=ping,
                 allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
             )
-        opening_view = TicketConfirmationView(guild, answers, interaction.user.id, button_data)
+
+        confirm_settings = confirmation.settings_for(guild.id)
+        order = confirmation_order(answers, button_data)
+        opening_view = confirmation.ConfirmView(
+            settings=confirm_settings,
+            order=order,
+            author_id=interaction.user.id,
+            guild=guild,
+        )
+
+        # Ticket management stays available, but the order/terms/payment flow
+        # itself is owned entirely by confirmation.py.
+        opening_view.add_item(TicketControls())
+
         opening_message = await channel.send(
             view=opening_view,
             allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
         )
     else:
+        # Only manually configured ticket buttons use answer variables in their
+        # custom opening message.
+        welcome_template = button_data.get("welcome") or DEFAULT_BUTTON["welcome"]
+        welcome = format_ticket_text(
+            welcome_template,
+            answers,
+            button_data,
+            extra={
+                "user": interaction.user.mention,
+                "username": interaction.user.name,
+                "guild_name": guild.name,
+                "ticket_number": str(number),
+                "channel": channel.mention,
+            },
+        )
         opening_view = TicketControlView(
-            ping, heading, welcome, detail
+            ping, None, welcome, None
         )
         opening_message = await channel.send(
             view=opening_view,
@@ -1274,26 +1289,6 @@ class TicketControls(discord.ui.ActionRow):
             CloseReasonModal(data, interaction.channel)
         )
 
-class TicketConfirmButton(discord.ui.Button):
-    def __init__(self, settings, order, author_id, guild):
-        super().__init__(style=discord.ButtonStyle.secondary)
-        confirmation.apply_label(self, settings.get("confirm_button"), guild, "confirm order")
-        self.settings = settings
-        self.order = order
-        self.author_id = author_id
-
-    async def callback(self, interaction):
-        view = confirmation.TermsView(
-            settings=self.settings,
-            order=self.order,
-            author_id=self.author_id,
-            guild=interaction.guild,
-        )
-        await interaction.response.send_message(
-            view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
 def confirmation_order(answers, button_data=None):
     order = {}
     if button_data and "questions" in button_data:
@@ -1312,40 +1307,6 @@ def confirmation_order(answers, button_data=None):
             order[re.sub(r"\s+", "_", label.strip().lower())] = val
             
     return order
-
-class TicketConfirmationView(discord.ui.LayoutView):
-    def __init__(self, guild, answers, author_id, button_data=None):
-        super().__init__(timeout=None)
-        settings = confirmation.settings_for(guild.id)
-        order = confirmation_order(answers, button_data)
-        
-        member = guild.get_member(author_id)
-        ctx_data = {
-            "user": member.mention if member else f"<@{author_id}>",
-            "username": member.name if member else str(author_id),
-            "guild_name": guild.name,
-        }
-        ctx_data.update(order)
-        
-        fmt = settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT)
-        
-        def replace_var(match):
-            key = match.group(1).strip()
-            if key in ctx_data:
-                return str(ctx_data[key])
-            if key.lower() in ctx_data:
-                return str(ctx_data[key.lower()])
-            return match.group(0)
-            
-        receipt = re.sub(r"\{([^}]+)\}", replace_var, fmt)
-        
-        container = discord.ui.Container()
-        container.add_item(discord.ui.TextDisplay(receipt[:4000]))
-        container.add_item(discord.ui.Separator())
-        controls = TicketControls()
-        controls.add_item(TicketConfirmButton(settings, order, author_id, guild))
-        container.add_item(controls)
-        self.add_item(container)
 
 class TicketControlView(discord.ui.LayoutView):
     def __init__(self, ping=None, heading=None, body=None, detail=None):
