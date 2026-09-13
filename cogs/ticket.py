@@ -522,6 +522,62 @@ def channel_slug(button_data, user, number, settings=None):
     slug = raw.lower().replace(" ", "-").strip("-")[:100]
     return slug or f"ticket-{number:04d}"
 
+def answer_context(answers, button_data=None):
+    """Build template variables from ticket modal answers.
+
+    A question configured as:
+        Order name | The item you purchased | {order_name}
+
+    exposes the customer's answer as ``{order_name}``.  Question labels are
+    also exposed automatically, so ``Order Name`` can be referenced with
+    ``{order_name}`` even when no explicit variable was configured.
+    """
+    context = {}
+    questions = (button_data or {}).get("questions", [])
+
+    for index, (label, answer) in enumerate(answers):
+        value = (answer or "").strip()
+        label = (label or "").strip()
+
+        if label:
+            label_lower = label.lower()
+            label_key = re.sub(r"\s+", "_", label_lower)
+            context[label_lower] = value
+            context[label_key] = value
+
+        if index < len(questions):
+            variable = (questions[index].get("variable") or "").strip()
+            variable = variable.strip("{}").strip()
+            if variable:
+                context[variable] = value
+                context[variable.lower()] = value
+
+    return context
+
+def format_ticket_text(template, answers, button_data=None, extra=None):
+    """Replace {variables} in ticket text with modal answers/context values."""
+    if not template:
+        return template
+
+    context = answer_context(answers, button_data)
+    if extra:
+        for key, value in extra.items():
+            if key is None:
+                continue
+            key = str(key).strip()
+            context[key] = "" if value is None else str(value)
+            context[key.lower()] = "" if value is None else str(value)
+
+    def replace_var(match):
+        key = match.group(1).strip()
+        if key in context:
+            return str(context[key])
+        if key.lower() in context:
+            return str(context[key.lower()])
+        return match.group(0)
+
+    return re.sub(r"\{([^{}]+)\}", replace_var, template)
+
 async def create_ticket(interaction, button_data, answers):
     guild = interaction.guild
     settings = get_config(guild.id)
@@ -613,7 +669,19 @@ async def create_ticket(interaction, button_data, answers):
     }
     save_tickets()
 
-    welcome = button_data.get("welcome") or DEFAULT_BUTTON["welcome"]
+    welcome_template = button_data.get("welcome") or DEFAULT_BUTTON["welcome"]
+    welcome = format_ticket_text(
+        welcome_template,
+        answers,
+        button_data,
+        extra={
+            "user": interaction.user.mention,
+            "username": interaction.user.name,
+            "guild_name": guild.name,
+            "ticket_number": str(number),
+            "channel": channel.mention,
+        },
+    )
     heading = None
     detail = None
 
@@ -1227,23 +1295,9 @@ class TicketConfirmButton(discord.ui.Button):
         )
 
 def confirmation_order(answers, button_data=None):
-    order = {}
-    if button_data and "questions" in button_data:
-        for q, (label, answer) in zip(button_data["questions"], answers):
-            val = (answer or "").strip()
-            if q.get("variable"):
-                order[q.get("variable").strip()] = val
-            if label:
-                order[label.strip().lower()] = val
-                order[re.sub(r"\s+", "_", label.strip().lower())] = val
-            
-    for label, answer in answers:
-        val = (answer or "").strip()
-        if label:
-            order[label.strip().lower()] = val
-            order[re.sub(r"\s+", "_", label.strip().lower())] = val
-            
-    return order
+    # Keep the confirmation system and the opening-message formatter on the
+    # exact same variable rules.
+    return answer_context(answers, button_data)
 
 class TicketConfirmationView(discord.ui.LayoutView):
     def __init__(self, guild, answers, author_id, button_data=None):
@@ -1252,24 +1306,17 @@ class TicketConfirmationView(discord.ui.LayoutView):
         order = confirmation_order(answers, button_data)
         
         member = guild.get_member(author_id)
-        ctx_data = {
-            "user": member.mention if member else f"<@{author_id}>",
-            "username": member.name if member else str(author_id),
-            "guild_name": guild.name,
-        }
-        ctx_data.update(order)
-        
         fmt = settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT)
-        
-        def replace_var(match):
-            key = match.group(1).strip()
-            if key in ctx_data:
-                return str(ctx_data[key])
-            if key.lower() in ctx_data:
-                return str(ctx_data[key.lower()])
-            return match.group(0)
-            
-        receipt = re.sub(r"\{([^}]+)\}", replace_var, fmt)
+        receipt = format_ticket_text(
+            fmt,
+            answers,
+            button_data,
+            extra={
+                "user": member.mention if member else f"<@{author_id}>",
+                "username": member.name if member else str(author_id),
+                "guild_name": guild.name,
+            },
+        )
         
         container = discord.ui.Container()
         container.add_item(discord.ui.TextDisplay(receipt[:4000]))
