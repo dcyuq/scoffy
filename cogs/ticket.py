@@ -1038,7 +1038,7 @@ class ContainerPanelView(discord.ui.LayoutView):
     def __init__(self, guild_id, settings):
         super().__init__(timeout=None)
         panel = settings["panel"]
-        container = discord.ui.Container(color=None)
+        container = discord.ui.Container()
 
         title = (panel.get("title") or "").strip()
         description = (panel.get("description") or "").strip()
