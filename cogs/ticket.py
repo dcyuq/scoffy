@@ -1230,24 +1230,19 @@ def confirmation_order(answers, button_data=None):
     order = {}
     if button_data and "questions" in button_data:
         for q, (label, answer) in zip(button_data["questions"], answers):
-            var_name = q.get("variable") or re.sub(r"\s+", "_", q.get("label", "").lower())
             val = (answer or "").strip()
-            order[var_name] = val
-            order[re.sub(r"\s+", "_", q.get("label", "").lower())] = val
+            if q.get("variable"):
+                order[q.get("variable").strip()] = val
+            if label:
+                order[label.strip().lower()] = val
+                order[re.sub(r"\s+", "_", label.strip().lower())] = val
             
-    aliases = {
-        "item": {"item", "order", "product", "name"},
-        "price": {"price", "amount", "cost", "total"},
-        "quantity": {"quantity", "qty", "how many"},
-        "notes": {"notes", "note", "details", "description", "extra", "details/notes"},
-        "code": {"code", "discount", "discount code"},
-    }
     for label, answer in answers:
-        normalized = re.sub(r"\s+", " ", (label or "").strip().lower())
-        for field, names in aliases.items():
-            if normalized in names and field not in order:
-                order[field] = (answer or "").strip()
-                break
+        val = (answer or "").strip()
+        if label:
+            order[label.strip().lower()] = val
+            order[re.sub(r"\s+", "_", label.strip().lower())] = val
+            
     return order
 
 class TicketConfirmationView(discord.ui.LayoutView):
@@ -1265,11 +1260,17 @@ class TicketConfirmationView(discord.ui.LayoutView):
         ctx_data.update(order)
         
         fmt = settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT)
-        try:
-            receipt = fmt.format_map(defaultdict(str, ctx_data))
-        except Exception:
-            receipt = confirmation.render(fmt, order, author_id, guild)
+        
+        def replace_var(match):
+            key = match.group(1).strip()
+            if key in ctx_data:
+                return str(ctx_data[key])
+            if key.lower() in ctx_data:
+                return str(ctx_data[key.lower()])
+            return match.group(0)
             
+        receipt = re.sub(r"\{([^}]+)\}", replace_var, fmt)
+        
         container = discord.ui.Container()
         container.add_item(discord.ui.TextDisplay(receipt[:4000]))
         container.add_item(discord.ui.Separator())
@@ -1529,7 +1530,7 @@ class QuestionsModal(discord.ui.Modal, title="Ticket Questions"):
                 if ph:
                     parts.append(ph)
                 if var:
-                    parts.append(var)
+                    parts.append(f"{{{var}}}")
                 current = " | ".join(parts)
 
             ph_example = examples[i] if i < len(examples) else "Label | Placeholder | {variable}"
