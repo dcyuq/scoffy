@@ -634,7 +634,7 @@ async def create_ticket(interaction, button_data, answers):
         )
     else:
         opening_view = TicketControlView(
-            ping, heading, welcome, detail, settings["panel"]["color"]
+            ping, heading, welcome, detail
         )
         opening_message = await channel.send(
             view=opening_view,
@@ -1262,14 +1262,12 @@ class TicketConfirmationView(discord.ui.LayoutView):
         self.add_item(container)
 
 class TicketControlView(discord.ui.LayoutView):
-    def __init__(self, ping=None, heading=None, body=None, detail=None, color=None):
+    def __init__(self, ping=None, heading=None, body=None, detail=None):
         super().__init__(timeout=None)
         if ping:
             self.add_item(discord.ui.TextDisplay(ping))
 
-        container = discord.ui.Container(
-            accent_colour=discord.Colour(color) if color else None
-        )
+        container = discord.ui.Container()
         if heading:
             container.add_item(discord.ui.TextDisplay(heading))
             container.add_item(discord.ui.Separator())
