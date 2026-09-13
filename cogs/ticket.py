@@ -503,16 +503,12 @@ def channel_prefix(button_data):
     return button_data.get("channel_name") or button_data.get("label") or "ticket"
 
 def channel_slug(button_data, user, number, settings=None):
-    template = None
-    if button_data and button_data.get("channel_name"):
-        template = button_data.get("channel_name")
-    elif settings:
+    template = "{placeholder}-{username}"
+    if settings and settings.get("channel_name_template"):
         template = settings.get("channel_name_template")
     
-    if not template:
-        template = "{placeholder}-{username}"
-        
-    placeholder_val = button_data.get("label") or "ticket"
+    placeholder_val = (button_data.get("channel_name") if button_data else None) or (button_data.get("label") if button_data else None) or "ticket"
+    
     try:
         raw = template.format(
             placeholder=placeholder_val,
@@ -521,6 +517,7 @@ def channel_slug(button_data, user, number, settings=None):
         )
     except Exception:
         raw = f"{placeholder_val}-{user.name}"
+        
     slug = re.sub(r"[^a-z0-9_-]+", "-", raw.lower()).strip("-")[:100]
     return slug or f"ticket-{number:04d}"
 
@@ -1388,9 +1385,9 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             max_length=100,
         )
         self.f_channel = discord.ui.TextInput(
-            label="Channel name template override",
+            label="Channel name / placeholder",
             default=base.get("channel_name") or "",
-            placeholder="Blank uses global template",
+            placeholder="Custom text for {placeholder} (blank uses button label)",
             required=False,
             max_length=60,
         )
@@ -1765,7 +1762,7 @@ class ButtonManageView(discord.ui.View):
             description=(
                 f"**Icon** - {icon_text(self.button_data)}\n"
                 f"**Colour** - {style_label(self.button_data.get('style'))}\n"
-                f"**Channel template** - {channel_prefix(self.button_data)}\n"
+                f"**Channel placeholder** - {channel_prefix(self.button_data)}\n"
                 f"**Category** - {category_text}\n"
                 f"**Behaviour** - {mode}\n\n"
                 f"{listed}"
