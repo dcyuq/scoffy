@@ -613,7 +613,7 @@ async def create_ticket(interaction, button_data, answers):
     save_tickets()
 
     welcome = button_data.get("welcome") or DEFAULT_BUTTON["welcome"]
-    heading = f"### Ticket {number:04d} - {button_data['label']}"
+    heading = None
     detail = "\n\n".join(
         f"**{question[:256]}**\n{(answer or '-')[:1024]}" for question, answer in answers
     ) or None
