@@ -1069,11 +1069,18 @@ class TicketQuestionModal(discord.ui.Modal):
         self.inputs = []
 
         for question in button_data["questions"][:MAX_QUESTIONS]:
+            required = question.get("required", True)
+
+            # Notes and Code are optional on the designated Order ticket,
+            # including existing order buttons saved with them as required.
+            if button_data.get("confirmation_mode") and question.get("label", "").strip().lower() in {"notes", "code"}:
+                required = False
+
             field = discord.ui.TextInput(
                 label=question["label"][:45],
                 placeholder=question.get("placeholder"),
                 style=discord.TextStyle.short,
-                required=question.get("required", True),
+                required=required,
                 max_length=1000,
             )
             self.inputs.append((question["label"], field))
