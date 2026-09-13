@@ -1038,7 +1038,7 @@ class ContainerPanelView(discord.ui.LayoutView):
     def __init__(self, guild_id, settings):
         super().__init__(timeout=None)
         panel = settings["panel"]
-        container = discord.ui.Container()
+        container = discord.ui.Container(color=None)
 
         title = (panel.get("title") or "").strip()
         description = (panel.get("description") or "").strip()
@@ -1495,11 +1495,11 @@ class QuestionsModal(discord.ui.Modal, title="Ticket Questions"):
         existing = button_data.get("questions", [])
         self.fields = []
         examples = [
-            "Item | e.g. Nitro Gift",
-            "Price | e.g. $9.99",
-            "Quantity | e.g. 1",
-            "Notes | e.g. Special instructions",
-            "Code | e.g. DISCOUNT10",
+            "Item | e.g. Nitro Gift | {item_name}",
+            "Price | e.g. $9.99 | {price}",
+            "Quantity | e.g. 1 | {qty}",
+            "Notes | e.g. Special instructions | {notes}",
+            "Code | e.g. DISCOUNT10 | {code}",
         ]
         for i in range(MAX_QUESTIONS):
             current = ""
@@ -1507,15 +1507,21 @@ class QuestionsModal(discord.ui.Modal, title="Ticket Questions"):
                 q = existing[i]
                 lbl = q.get("label", "")
                 ph = q.get("placeholder", "")
-                current = f"{lbl} | {ph}" if ph else lbl
+                var = q.get("variable", "")
+                parts = [lbl]
+                if ph:
+                    parts.append(ph)
+                if var:
+                    parts.append(var)
+                current = " | ".join(parts)
 
-            ph_example = examples[i] if i < len(examples) else "Label | e.g. Placeholder text"
+            ph_example = examples[i] if i < len(examples) else "Label | Placeholder | {variable}"
             field = discord.ui.TextInput(
                 label=f"Question {i + 1}",
                 default=current,
                 placeholder=ph_example,
                 required=False,
-                max_length=100,
+                max_length=150,
             )
             self.fields.append(field)
             self.add_item(field)
@@ -1527,11 +1533,13 @@ class QuestionsModal(discord.ui.Modal, title="Ticket Questions"):
         for field in self.fields:
             text = field.value.strip()
             if text:
-                if "|" in text:
-                    lbl, ph = text.split("|", 1)
-                    questions.append({"label": lbl.strip()[:45], "placeholder": ph.strip()[:100]})
-                else:
-                    questions.append({"label": text[:45]})
+                parts = [p.strip() for p in text.split("|")]
+                q_data = {"label": parts[0][:45]}
+                if len(parts) > 1 and parts[1]:
+                    q_data["placeholder"] = parts[1][:100]
+                if len(parts) > 2 and parts[2]:
+                    q_data["variable"] = parts[2].strip("{}")[:50]
+                questions.append(q_data)
 
         self.button_data["questions"] = questions
         save_config()
@@ -1752,7 +1760,9 @@ class ButtonManageView(discord.ui.View):
         elif count:
             mode = f"Asks {count} question(s) before opening"
             listed = "\n".join(
-                f"{i + 1}. {q['label']}" + (f" (placeholder: {q['placeholder']})" if q.get('placeholder') else "")
+                f"{i + 1}. **{q['label']}**"
+                + (f" (placeholder: `{q['placeholder']}`)" if q.get('placeholder') else "")
+                + (f" [var: `{{{q['variable']}}}`]" if q.get('variable') else "")
                 for i, q in enumerate(self.button_data["questions"])
             )
         else:
