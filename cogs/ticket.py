@@ -1496,6 +1496,13 @@ class QuestionsModal(discord.ui.Modal, title="Ticket Questions"):
 
         existing = button_data.get("questions", [])
         self.fields = []
+        examples = [
+            "Item | e.g. Nitro Gift",
+            "Price | e.g. $9.99",
+            "Quantity | e.g. 1",
+            "Notes | e.g. Special instructions",
+            "Code | e.g. DISCOUNT10",
+        ]
         for i in range(MAX_QUESTIONS):
             current = ""
             if i < len(existing):
@@ -1504,10 +1511,11 @@ class QuestionsModal(discord.ui.Modal, title="Ticket Questions"):
                 ph = q.get("placeholder", "")
                 current = f"{lbl} | {ph}" if ph else lbl
 
+            ph_example = examples[i] if i < len(examples) else "Label | e.g. Placeholder text"
             field = discord.ui.TextInput(
                 label=f"Question {i + 1}",
                 default=current,
-                placeholder="Label | Placeholder (optional)",
+                placeholder=ph_example,
                 required=False,
                 max_length=100,
             )
