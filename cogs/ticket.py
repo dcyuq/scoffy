@@ -5,6 +5,7 @@ import uuid
 import io
 import html
 import datetime
+from collections import defaultdict
 
 import discord
 from discord import app_commands
@@ -1230,7 +1231,9 @@ def confirmation_order(answers, button_data=None):
     if button_data and "questions" in button_data:
         for q, (label, answer) in zip(button_data["questions"], answers):
             var_name = q.get("variable") or re.sub(r"\s+", "_", q.get("label", "").lower())
-            order[var_name] = (answer or "").strip()
+            val = (answer or "").strip()
+            order[var_name] = val
+            order[re.sub(r"\s+", "_", q.get("label", "").lower())] = val
             
     aliases = {
         "item": {"item", "order", "product", "name"},
@@ -1252,11 +1255,22 @@ class TicketConfirmationView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         settings = confirmation.settings_for(guild.id)
         order = confirmation_order(answers, button_data)
+        
+        member = guild.get_member(author_id)
+        ctx_data = {
+            "user": member.mention if member else f"<@{author_id}>",
+            "username": member.name if member else str(author_id),
+            "guild_name": guild.name,
+        }
+        ctx_data.update(order)
+        
+        fmt = settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT)
+        try:
+            receipt = fmt.format_map(defaultdict(str, ctx_data))
+        except Exception:
+            receipt = confirmation.render(fmt, order, author_id, guild)
+            
         container = discord.ui.Container()
-        receipt = confirmation.render(
-            settings.get("confirm_format", confirmation.DEFAULT_CONFIRM_FORMAT),
-            order, author_id, guild
-        )
         container.add_item(discord.ui.TextDisplay(receipt[:4000]))
         container.add_item(discord.ui.Separator())
         controls = TicketControls()
