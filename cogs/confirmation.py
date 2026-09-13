@@ -133,7 +133,6 @@ def ensure_config(guild_id):
     for field, value in defaults().items():
         settings.setdefault(field, value)
 
-    # Migrate the old single-GCash configuration into the new payment-method list.
     if not settings.get("payment_methods"):
         settings["payment_methods"] = [{
             "id": "gcash",
@@ -241,12 +240,10 @@ class ConfirmView(discord.ui.LayoutView):
     def build(self):
         self.clear_items()
 
-        # Keep the header/ping and confirmation container in the same message.
         ping = render(self.settings.get("ping") or "", self.order, self.author_id, self.guild).strip()
         if ping:
             self.add_item(discord.ui.TextDisplay(ping[:2000]))
 
-        # The confirmation itself stays inside one container.
         box = discord.ui.Container()
         box.add_item(discord.ui.TextDisplay(
             render(self.settings["confirm_format"], self.order, self.author_id, self.guild)[:4000]
@@ -256,15 +253,11 @@ class ConfirmView(discord.ui.LayoutView):
         if footer:
             box.add_item(discord.ui.TextDisplay(footer[:1000]))
 
-        # The separator belongs to the container, so its length follows
-        # the container/format width instead of being a separate full-width element.
         box.add_item(discord.ui.Separator())
         box.add_item(ConfirmRow(self, self.settings.get("confirm_button"), self.guild))
         self.add_item(box)
 
     async def confirm(self, interaction):
-        # Keep the order confirmation message intact.
-        # If Terms & Conditions are disabled, go directly to payment options.
         settings = self.settings
 
         if not settings.get("terms_enabled", True):
@@ -327,8 +320,6 @@ class TermsView(discord.ui.LayoutView):
         self.add_item(box)
 
     async def agree(self, interaction):
-        # Keep Terms & Conditions intact and send payment options as a new
-        # public message in the ticket channel.
         view = PaymentView(self.settings, self.order, self.author_id, interaction.guild)
         await interaction.response.send_message(
             view=view,
@@ -342,8 +333,6 @@ class PaymentMethodRow(discord.ui.ActionRow):
         self.owner = parent
         self.methods = methods
 
-        # Discord action rows support up to five buttons. Payment methods beyond
-        # five are automatically split into additional rows by PaymentView.
         for method in methods:
             button = discord.ui.Button(style=discord.ButtonStyle.secondary)
             apply_label(
@@ -401,10 +390,10 @@ class PaymentView(discord.ui.LayoutView):
             interaction.guild,
             method,
         )
-        # Keep the payment-options message intact and send the selected
-        # payment method as a new public message in the ticket channel.
+        # Ephemeral=True makes the selected payment option visible to ONLY the user clicking the button
         await interaction.response.send_message(
             view=view,
+            ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -522,7 +511,6 @@ class PaymentMethodModal(discord.ui.Modal):
                 or f"payment-{len(methods) + 1}"
             )
 
-            # Keep IDs unique even if two methods have similar names.
             existing_ids = {method.get("id") for method in methods}
             base_id = method_id
             counter = 2
@@ -873,7 +861,6 @@ class Confirmation(commands.Cog):
             "notes": (notes or "").strip(),
             "code": (code or "").strip(),
         }
-        # Keep the header and confirmation container in the same message.
         view = ConfirmView(settings, order, ctx.author.id, ctx.guild)
         await ctx.send(
             view=view,
