@@ -352,6 +352,7 @@ def ensure_config(guild_id):
             "counter": 0,
             "panel": dict(DEFAULT_PANEL),
             "buttons": [],
+            "channel_name_template": "{placeholder}-{username}",
         }
 
     settings = config[key]
@@ -359,6 +360,7 @@ def ensure_config(guild_id):
     settings.setdefault("buttons", [])
     settings.setdefault("counter", 0)
     settings.setdefault("staff_role_ids", [])
+    settings.setdefault("channel_name_template", "{placeholder}-{username}")
     settings["panel"].setdefault("mode", "embed_title")
     settings["panel"].setdefault("layout", "buttons")
     settings["panel"].setdefault("placeholder", "open a ticket")
@@ -500,20 +502,25 @@ def button_text(button_data):
 def channel_prefix(button_data):
     return button_data.get("channel_name") or button_data.get("label") or "ticket"
 
-def channel_slug(button_data, user, number):
-    template = button_data.get("channel_name")
-    placeholder_val = button_data.get("label") or "ticket"
+def channel_slug(button_data, user, number, settings=None):
+    template = None
+    if button_data and button_data.get("channel_name"):
+        template = button_data.get("channel_name")
+    elif settings:
+        template = settings.get("channel_name_template")
+    
     if not template:
+        template = "{placeholder}-{username}"
+        
+    placeholder_val = button_data.get("label") or "ticket"
+    try:
+        raw = template.format(
+            placeholder=placeholder_val,
+            username=user.name,
+            number=f"{number:04d}"
+        )
+    except Exception:
         raw = f"{placeholder_val}-{user.name}"
-    else:
-        try:
-            raw = template.format(
-                placeholder=placeholder_val,
-                username=user.name,
-                number=f"{number:04d}"
-            )
-        except Exception:
-            raw = f"{placeholder_val}-{user.name}"
     slug = re.sub(r"[^a-z0-9_-]+", "-", raw.lower()).strip("-")[:100]
     return slug or f"ticket-{number:04d}"
 
@@ -580,7 +587,7 @@ async def create_ticket(interaction, button_data, answers):
 
     try:
         channel = await guild.create_text_channel(
-            name=channel_slug(button_data, interaction.user, number),
+            name=channel_slug(button_data, interaction.user, number, settings),
             category=category,
             overwrites=overwrites,
             reason=f"Ticket opened by {interaction.user}",
@@ -1381,9 +1388,9 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             max_length=100,
         )
         self.f_channel = discord.ui.TextInput(
-            label="Channel name template",
+            label="Channel name template override",
             default=base.get("channel_name") or "",
-            placeholder="e.g. {placeholder}-{username} or ticket-{number}",
+            placeholder="Blank uses global template",
             required=False,
             max_length=60,
         )
@@ -1460,6 +1467,28 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             self.existing["welcome"] = welcome
 
         save_config()
+        await self.builder.refresh()
+
+class TicketNameModal(discord.ui.Modal, title="Ticket Channel Name"):
+    def __init__(self, builder):
+        super().__init__()
+        self.builder = builder
+        self.f_template = discord.ui.TextInput(
+            label="Channel Name Template",
+            default=builder.settings.get("channel_name_template") or "{placeholder}-{username}",
+            placeholder="{placeholder}-{username}",
+            max_length=60,
+            required=True,
+        )
+        self.add_item(self.f_template)
+
+    async def on_submit(self, interaction):
+        self.builder.settings["channel_name_template"] = self.f_template.value.strip() or "{placeholder}-{username}"
+        save_config()
+        await interaction.response.send_message(
+            embed=embeds.notice("ticket channel name template updated successfully."),
+            ephemeral=True,
+        )
         await self.builder.refresh()
 
 class QuestionsModal(discord.ui.Modal, title="Ticket Questions"):
@@ -1888,12 +1917,14 @@ class BuilderView(discord.ui.View):
         log = guild.get_channel(settings.get("log_channel_id"))
         target = guild.get_channel(panel.get("channel_id"))
         roles = staff_roles(guild, settings)
+        channel_template = settings.get("channel_name_template", "{placeholder}-{username}")
 
         lines = [
             f"**Category** - {category.name if category else 'not set'}",
             f"**Staff** - {' '.join(r.mention for r in roles) if roles else 'not set'}",
             f"**Logs** - {log.mention if log else 'not set'}",
             f"**Panel** - {target.mention if target else 'not set'}",
+            f"**Ticket Name** - `{channel_template}`",
             "",
             f"**Style** - {panel_mode_label(panel)}",
         ]
@@ -1915,7 +1946,7 @@ class BuilderView(discord.ui.View):
                 where = cat.name if cat else "default"
                 if entry.get("confirmation_mode"):
                     mode = "confirmation"
-                lines.append(f"- {shown} ({colour}, {mode}, {where}, pattern: `{channel_prefix(entry)}`)")
+                lines.append(f"- {shown} ({colour}, {mode}, {where})")
         else:
             lines.append("")
             lines.append("**Buttons** - none yet, add one before publishing")
@@ -1934,7 +1965,7 @@ class BuilderView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    @discord.ui.button(label="Channels & Roles", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Channels & Roles", style=discord.ButtonStyle.secondary, row=0)
     async def open_settings(self, interaction, button):
         await interaction.response.send_message(
             embed=embeds.notice("pick your category, staff roles, log channel and panel channel."),
@@ -1942,14 +1973,18 @@ class BuilderView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Appearance", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Ticket Name", style=discord.ButtonStyle.secondary, row=0)
+    async def open_ticket_name(self, interaction, button):
+        await interaction.response.send_modal(TicketNameModal(self))
+
+    @discord.ui.button(label="Appearance", style=discord.ButtonStyle.secondary, row=0)
     async def open_appearance(self, interaction, button):
         view = AppearanceView(self)
         await interaction.response.send_message(
             view.blurb(), view=view, ephemeral=True
         )
 
-    @discord.ui.button(label="Buttons", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Buttons", style=discord.ButtonStyle.secondary, row=1)
     async def open_buttons(self, interaction, button):
         view = ButtonsView(self)
         await interaction.response.send_message(
@@ -1958,7 +1993,7 @@ class BuilderView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Publish", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Publish", style=discord.ButtonStyle.secondary, row=1)
     async def publish(self, interaction, button):
         settings = self.settings
         problems = []
