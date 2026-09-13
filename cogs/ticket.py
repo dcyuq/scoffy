@@ -518,7 +518,7 @@ def channel_slug(button_data, user, number, settings=None):
     except Exception:
         raw = f"{placeholder_val}-{user.name}"
         
-    slug = re.sub(r"[^a-z0-9_-]+", "-", raw.lower()).strip("-")[:100]
+    slug = raw.lower().replace(" ", "-").strip("-")[:100]
     return slug or f"ticket-{number:04d}"
 
 async def create_ticket(interaction, button_data, answers):
