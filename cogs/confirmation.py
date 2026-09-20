@@ -235,7 +235,7 @@ class ConfirmRow(discord.ui.ActionRow):
 
 class ConfirmView(discord.ui.LayoutView):
     def __init__(self, settings, order, author_id, guild):
-        super().__init__(timeout=600)
+        super().__init__(timeout=None)
         self.settings = settings
         self.order = order
         self.author_id = author_id
@@ -305,7 +305,7 @@ class TermsRow(discord.ui.ActionRow):
 
 class TermsView(discord.ui.LayoutView):
     def __init__(self, settings, order, author_id, guild):
-        super().__init__(timeout=600)
+        super().__init__(timeout=None)
         self.settings = settings
         self.order = order
         self.author_id = author_id
