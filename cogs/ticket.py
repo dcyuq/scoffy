@@ -407,6 +407,10 @@ def is_staff(member, settings):
     allowed = set(staff_role_ids(settings))
     return any(r.id in allowed for r in member.roles)
 
+def can_close(member, settings):
+    perms = member.guild_permissions
+    return is_staff(member, settings) or perms.manage_channels or perms.manage_guild
+
 def find_button(settings, key):
     for entry in settings.get("buttons", []):
         if entry["key"] == key:
@@ -507,9 +511,9 @@ def channel_slug(button_data, user, number, settings=None):
     template = "{placeholder}-{username}"
     if settings and settings.get("channel_name_template"):
         template = settings.get("channel_name_template")
-    
+
     placeholder_val = (button_data.get("channel_name") if button_data else None) or (button_data.get("label") if button_data else None) or "ticket"
-    
+
     try:
         raw = template.format(
             placeholder=placeholder_val,
@@ -518,20 +522,11 @@ def channel_slug(button_data, user, number, settings=None):
         )
     except Exception:
         raw = f"{placeholder_val}-{user.name}"
-        
+
     slug = raw.lower().replace(" ", "-").strip("-")[:100]
     return slug or f"ticket-{number:04d}"
 
 def answer_context(answers, button_data=None):
-    """Build template variables from ticket modal answers.
-
-    A question configured as:
-        Order name | The item you purchased | {order_name}
-
-    exposes the customer's answer as ``{order_name}``.  Question labels are
-    also exposed automatically, so ``Order Name`` can be referenced with
-    ``{order_name}`` even when no explicit variable was configured.
-    """
     context = {}
     questions = (button_data or {}).get("questions", [])
 
@@ -555,7 +550,6 @@ def answer_context(answers, button_data=None):
     return context
 
 def format_ticket_text(template, answers, button_data=None, extra=None):
-    """Replace {variables} in ticket text with modal answers/context values."""
     if not template:
         return template
 
@@ -651,7 +645,7 @@ async def create_ticket(interaction, button_data, answers):
             embed=embeds.error("i don't have permission to create channels there."), ephemeral=True
         )
         return
-    except discord.HTTPException as exc:
+    except discord.HTTPException:
         await interaction.followup.send(
             embed=embeds.error("discord turned that request down. check the log."),
             ephemeral=True,
@@ -673,9 +667,6 @@ async def create_ticket(interaction, button_data, answers):
     ping = f"{interaction.user.mention} {mentions}".strip()
 
     if button_data.get("confirmation_mode"):
-        # The designated Order button uses confirmation.py directly.
-        # This keeps the confirmation setup (including terms_enabled) as the
-        # single source of truth instead of duplicating that flow in tickets.py.
         if ping:
             await channel.send(
                 content=ping,
@@ -690,18 +681,13 @@ async def create_ticket(interaction, button_data, answers):
             author_id=interaction.user.id,
             guild=guild,
         )
-
-        # Ticket management stays available, but the order/terms/payment flow
-        # itself is owned entirely by confirmation.py.
         opening_view.add_item(TicketControls())
 
-        opening_message = await channel.send(
+        await channel.send(
             view=opening_view,
             allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
         )
     else:
-        # Only manually configured ticket buttons use answer variables in their
-        # custom opening message.
         welcome_template = button_data.get("welcome") or DEFAULT_BUTTON["welcome"]
         welcome = format_ticket_text(
             welcome_template,
@@ -715,10 +701,8 @@ async def create_ticket(interaction, button_data, answers):
                 "channel": channel.mention,
             },
         )
-        opening_view = TicketControlView(
-            ping, None, welcome, None
-        )
-        opening_message = await channel.send(
+        opening_view = TicketControlView(ping, None, welcome, None)
+        await channel.send(
             view=opening_view,
             allowed_mentions=discord.AllowedMentions(users=True, roles=roles or False),
         )
@@ -970,7 +954,6 @@ async def dm_transcript(client, guild, entry, document, transcript_url):
         pass
 
 async def close_ticket_channel(channel, guild, closer, client, data, reason=None):
-    """Close a tracked ticket, write its log/transcript, DM the opener, and delete it."""
     reason = (reason or "").strip()
     messages = await collect_messages(channel)
 
@@ -1040,7 +1023,7 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
         self.channel = channel
         self.f_reason = discord.ui.TextInput(
             label="Reason for closing",
-            placeholder="Optional — leave blank to close without a reason",
+            placeholder="Optional, leave blank to close without a reason",
             style=discord.TextStyle.paragraph,
             max_length=1000,
             required=False,
@@ -1048,6 +1031,13 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket"):
         self.add_item(self.f_reason)
 
     async def on_submit(self, interaction):
+        settings = get_config(interaction.guild.id)
+        if not settings or not can_close(interaction.user, settings):
+            await interaction.response.send_message(
+                embed=embeds.error("only staff can close tickets."), ephemeral=True
+            )
+            return
+
         await interaction.response.send_message(
             embed=embeds.notice("closing this ticket. a transcript is on its way."),
             ephemeral=True,
@@ -1071,8 +1061,6 @@ class TicketQuestionModal(discord.ui.Modal):
         for question in button_data["questions"][:MAX_QUESTIONS]:
             required = question.get("required", True)
 
-            # Notes and Code are optional on the designated Order ticket,
-            # including existing order buttons saved with them as required.
             if button_data.get("confirmation_mode") and question.get("label", "").strip().lower() in {"notes", "code"}:
                 required = False
 
@@ -1297,12 +1285,9 @@ class TicketControls(discord.ui.ActionRow):
             )
             return
 
-        if (
-            not is_staff(interaction.user, settings)
-            and interaction.user.id != data["opener_id"]
-        ):
+        if not can_close(interaction.user, settings):
             await interaction.response.send_message(
-                embed=embeds.error("only staff or the ticket opener can close this."), ephemeral=True
+                embed=embeds.error("only staff can close tickets."), ephemeral=True
             )
             return
 
@@ -1320,13 +1305,13 @@ def confirmation_order(answers, button_data=None):
             if label:
                 order[label.strip().lower()] = val
                 order[re.sub(r"\s+", "_", label.strip().lower())] = val
-            
+
     for label, answer in answers:
         val = (answer or "").strip()
         if label:
             order[label.strip().lower()] = val
             order[re.sub(r"\s+", "_", label.strip().lower())] = val
-            
+
     return order
 
 class TicketControlView(discord.ui.LayoutView):
@@ -1915,9 +1900,9 @@ class ButtonPickSelect(discord.ui.Select):
                     "Order ticket preset"
                     if b.get("confirmation_mode")
                     else (
-                    f"{len(b.get('questions', []))} question(s)"
-                    if b.get("questions")
-                    else "Opens instantly"
+                        f"{len(b.get('questions', []))} question(s)"
+                        if b.get("questions")
+                        else "Opens instantly"
                     )
                 ),
             )
@@ -1995,7 +1980,7 @@ class BuilderView(discord.ui.View):
         panel = settings["panel"]
 
         category = guild.get_channel(settings.get("category_id"))
-        log = guild.get_channel(settings.get("log_channel_id"))
+        log_ch = guild.get_channel(settings.get("log_channel_id"))
         target = guild.get_channel(panel.get("channel_id"))
         roles = staff_roles(guild, settings)
         channel_template = settings.get("channel_name_template", "{placeholder}-{username}")
@@ -2003,7 +1988,7 @@ class BuilderView(discord.ui.View):
         lines = [
             f"**Category** - {category.name if category else 'not set'}",
             f"**Staff** - {' '.join(r.mention for r in roles) if roles else 'not set'}",
-            f"**Logs** - {log.mention if log else 'not set'}",
+            f"**Logs** - {log_ch.mention if log_ch else 'not set'}",
             f"**Panel** - {target.mention if target else 'not set'}",
             f"**Ticket Name** - `{channel_template}`",
             "",
@@ -2016,7 +2001,7 @@ class BuilderView(discord.ui.View):
             for entry in settings["buttons"]:
                 count = len(entry.get("questions", []))
                 if entry.get("confirmation_mode"):
-                    mode = "Order"
+                    mode = "confirmation"
                 else:
                     mode = f"asks {count}" if count else "instant"
                 colour = style_label(entry.get("style"))
@@ -2025,8 +2010,6 @@ class BuilderView(discord.ui.View):
                 override = entry.get("category_id")
                 cat = guild.get_channel(override) if override else None
                 where = cat.name if cat else "default"
-                if entry.get("confirmation_mode"):
-                    mode = "confirmation"
                 lines.append(f"- {shown} ({colour}, {mode}, {where})")
         else:
             lines.append("")
@@ -2134,7 +2117,7 @@ class BuilderView(discord.ui.View):
                 embed=embeds.error("i can't post in that channel."), ephemeral=True
             )
             return
-        except discord.HTTPException as exc:
+        except discord.HTTPException:
             await interaction.followup.send(
                 embed=embeds.error("discord turned the panel down. check the log."),
                 ephemeral=True,
@@ -2195,8 +2178,6 @@ class Tickets(commands.Cog):
         if ctx.guild is None:
             raise commands.NoPrivateMessage()
 
-        # /close is intentionally available to the ticket opener and ticket staff.
-        # The command itself performs the ticket-specific permission check.
         if ctx.command and ctx.command.name == "close":
             return True
 
@@ -2300,7 +2281,7 @@ class Tickets(commands.Cog):
 
     @commands.hybrid_command(
         name="close",
-        description="Close the current ticket, with or without a reason.",
+        description="Close the current ticket (staff only).",
     )
     @app_commands.describe(reason="Optional reason for closing this ticket.")
     @commands.guild_only()
@@ -2321,9 +2302,9 @@ class Tickets(commands.Cog):
             )
             return
 
-        if not is_staff(ctx.author, settings) and ctx.author.id != data["opener_id"]:
+        if not can_close(ctx.author, settings):
             await ctx.send(
-                embed=embeds.error("only staff or the ticket opener can close this."),
+                embed=embeds.error("only staff can close tickets."),
                 ephemeral=True,
             )
             return
