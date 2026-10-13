@@ -125,6 +125,7 @@ DEFAULT_BUTTON = {
     "emoji": None,
     "category_id": None,
     "channel_name": None,
+    "header": "{user} {staffs}",
     "welcome": "Describe your issue and someone will be with you shortly.",
     "questions": [],
     "confirmation_mode": False,
@@ -137,6 +138,8 @@ ORDER_PRESET_QUESTIONS = [
     {"label": "Notes", "placeholder": "e.g. Special instructions", "required": False},
     {"label": "Code", "placeholder": "e.g. DISCOUNT10", "required": False},
 ]
+
+HEADER_LIMIT = 1500
 
 def apply_order_preset(button_data):
     button_data["confirmation_mode"] = True
@@ -572,6 +575,36 @@ def format_ticket_text(template, answers, button_data=None, extra=None):
 
     return re.sub(r"\{([^{}]+)\}", replace_var, template)
 
+def header_template(button_data):
+    template = (button_data or {}).get("header", DEFAULT_BUTTON["header"])
+    if template is None:
+        template = DEFAULT_BUTTON["header"]
+    return template
+
+def render_header(button_data, answers, user, roles, number, channel=None):
+    template = header_template(button_data)
+    if not template.strip():
+        return ""
+    mentions = " ".join(r.mention for r in roles)
+    text = format_ticket_text(
+        template,
+        answers,
+        button_data,
+        extra={
+            "user": user.mention,
+            "opener": user.mention,
+            "username": user.name,
+            "staff": mentions,
+            "staffs": mentions,
+            "roles": mentions,
+            "number": f"{number:04d}",
+            "ticket_number": str(number),
+            "ticket": channel.mention if channel else "",
+            "channel": channel.mention if channel else "",
+        },
+    )
+    return text.strip()[:HEADER_LIMIT]
+
 async def create_ticket(interaction, button_data, answers):
     guild = interaction.guild
     settings = get_config(guild.id)
@@ -663,8 +696,7 @@ async def create_ticket(interaction, button_data, answers):
     }
     save_tickets()
 
-    mentions = " ".join(r.mention for r in roles)
-    ping = f"{interaction.user.mention} {mentions}".strip()
+    ping = render_header(button_data, answers, interaction.user, roles, number, channel)
 
     if button_data.get("confirmation_mode"):
         if ping:
@@ -1502,6 +1534,7 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
                     "emoji": emoji_value,
                     "category_id": category_id,
                     "channel_name": channel_name,
+                    "header": DEFAULT_BUTTON["header"],
                     "welcome": welcome,
                     "questions": [],
                     "confirmation_mode": False,
@@ -1515,6 +1548,29 @@ class ButtonEditModal(discord.ui.Modal, title="Ticket Button"):
             self.existing["welcome"] = welcome
 
         save_config()
+        await self.builder.refresh()
+
+class HeaderEditModal(discord.ui.Modal, title="Ticket Header"):
+    def __init__(self, builder, button_data):
+        super().__init__()
+        self.builder = builder
+        self.button_data = button_data
+        self.f_header = discord.ui.TextInput(
+            label="Header above the box",
+            default=header_template(button_data),
+            placeholder="{user} {staffs} - blank for no header",
+            style=discord.TextStyle.paragraph,
+            max_length=HEADER_LIMIT,
+            required=False,
+        )
+        self.add_item(self.f_header)
+
+    async def on_submit(self, interaction):
+        value = resolve_text(self.f_header.value, interaction.guild, interaction.client)
+        self.button_data["header"] = value.strip()
+        save_config()
+        refreshed = ButtonManageView(self.builder, self.button_data)
+        await interaction.response.edit_message(embed=refreshed.summary(), view=refreshed)
         await self.builder.refresh()
 
 class TicketNameModal(discord.ui.Modal, title="Ticket Channel Name"):
@@ -1822,6 +1878,9 @@ class ButtonManageView(discord.ui.View):
             mode = "Opens a ticket immediately"
             listed = "No questions set."
 
+        header = header_template(self.button_data).strip()
+        header_text = f"`{header}`" if header else "none"
+
         override = self.button_data.get("category_id")
         category = self.builder.ctx.guild.get_channel(override) if override else None
         category_text = category.name if category else "default category"
@@ -1832,6 +1891,7 @@ class ButtonManageView(discord.ui.View):
                 f"**Icon** - {icon_text(self.button_data)}\n"
                 f"**Colour** - {style_label(self.button_data.get('style'))}\n"
                 f"**Channel placeholder** - {channel_prefix(self.button_data)}\n"
+                f"**Header** - {header_text}\n"
                 f"**Category** - {category_text}\n"
                 f"**Behaviour** - {mode}\n\n"
                 f"{listed}"
@@ -1874,6 +1934,12 @@ class ButtonManageView(discord.ui.View):
         await interaction.followup.send(
             embed=embeds.notice(f"`{self.button_data['label']}` now opens a ticket immediately."),
             ephemeral=True,
+        )
+
+    @discord.ui.button(label="Set Header", style=discord.ButtonStyle.secondary, row=3)
+    async def set_header(self, interaction, button):
+        await interaction.response.send_modal(
+            HeaderEditModal(self.builder, self.button_data)
         )
 
     @discord.ui.button(label="Delete Button", style=discord.ButtonStyle.secondary, row=3)
